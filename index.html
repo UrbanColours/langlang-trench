@@ -200,11 +200,23 @@ require([
 
   const token = getTokenFromHash();
   if (token) {
-    // Register token with SDK so it's appended to all service requests
-    esriId.registerToken({ server: ORG_URL + "/sharing/rest",              token, ssl: true });
-    esriId.registerToken({ server: "https://services-ap1.arcgis.com",      token, ssl: true });
     // Clean hash from URL
     history.replaceState({}, document.title, window.location.pathname);
+
+    // Intercept all requests: strip credentials, append token as URL param.
+    // This avoids the CORS "Access-Control-Allow-Origin: *" + credentials conflict.
+    esriConfig.request.interceptors.push({
+      before(params) {
+        // Strip credentials and inject token as a URL param for all AGOL/services requests.
+        // Without this the SDK sends withCredentials:true which the server's
+        // "Access-Control-Allow-Origin: *" header rejects.
+        const sep = params.url.includes("?") ? "&" : "?";
+        params.url += sep + "token=" + token;
+        params.requestOptions = params.requestOptions || {};
+        params.requestOptions.credentials = "omit";
+      }
+    });
+
     startApp();
   } else {
     redirectToLogin();

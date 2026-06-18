@@ -155,13 +155,12 @@
 <script>
 require([
   "esri/config",
-  "esri/identity/OAuthInfo",
   "esri/identity/IdentityManager",
   "esri/Map",
   "esri/views/MapView",
   "esri/layers/FeatureLayer"
 ], function(
-  esriConfig, OAuthInfo, esriId,
+  esriConfig, esriId,
   Map, MapView, FeatureLayer
 ) {
 
@@ -170,19 +169,11 @@ require([
   const ORG_URL        = "https://urbancolours.maps.arcgis.com";
   const SERVICE_URL    = "https://services-ap1.arcgis.com/IgsWg2ar08bbG8Nj/arcgis/rest/services/LangLang_SalvageProgram_DigitalSurvey/FeatureServer";
   const SURVEY_ITEM_ID = "4ddce64cfc9f4de18f43c5ec1c2a0c52";
+  const REDIRECT_URI   = "https://urbancolours.github.io/langlang-trench/";
 
-  const GRID_URL   = SERVICE_URL + "/0";  // GridSquares
-  const TP_URL     = SERVICE_URL + "/1";  // TestPit
-  const DIARY_URL  = SERVICE_URL + "/3";  // Diary
-
-  // ── AUTH ──────────────────────────────────────────────────────────────────
-  esriConfig.portalUrl = ORG_URL;
-  esriConfig.request.trustedServers.push("services-ap1.arcgis.com");
-  esriId.registerOAuthInfos([new OAuthInfo({
-    appId: CLIENT_ID,
-    portalUrl: ORG_URL,
-    popup: false
-  })]);
+  const GRID_URL   = SERVICE_URL + "/0";
+  const TP_URL     = SERVICE_URL + "/1";
+  const DIARY_URL  = SERVICE_URL + "/3";
 
   // ── STATE ─────────────────────────────────────────────────────────────────
   let selected      = [];
@@ -192,17 +183,34 @@ require([
   let layerView     = null;
   let gridLayer, tpLayer, diaryLayer, map, view;
 
-  // ── INIT — auth first, then build map ─────────────────────────────────────
-  esriId.checkSignInStatus(ORG_URL + "/sharing")
-    .catch(() => esriId.getCredential(ORG_URL + "/sharing"))
-    .then(startApp)
-    .catch(err => {
-      document.getElementById("diary-status").textContent = "Login failed: " + err.message;
-      document.getElementById("diary-status").className = "error";
-    });
+  // ── AUTH — implicit grant (token in URL hash) ─────────────────────────────
+  function getTokenFromHash() {
+    const params = new URLSearchParams(window.location.hash.replace("#", "?"));
+    return params.get("access_token");
+  }
+
+  function redirectToLogin() {
+    const url = `${ORG_URL}/sharing/rest/oauth2/authorize` +
+      `?client_id=${CLIENT_ID}` +
+      `&response_type=token` +
+      `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
+      `&expiration=20160`;
+    window.location.href = url;
+  }
+
+  const token = getTokenFromHash();
+  if (token) {
+    // Register token with SDK so it's appended to all service requests
+    esriId.registerToken({ server: ORG_URL + "/sharing/rest",              token, ssl: true });
+    esriId.registerToken({ server: "https://services-ap1.arcgis.com",      token, ssl: true });
+    // Clean hash from URL
+    history.replaceState({}, document.title, window.location.pathname);
+    startApp();
+  } else {
+    redirectToLogin();
+  }
 
   function startApp() {
-    // Layers created AFTER auth so token is available
     gridLayer = new FeatureLayer({
       url: GRID_URL,
       outFields: ["OBJECTID", "GlobalID", "square_id", "status", "test_pit_globalid"],

@@ -177,51 +177,75 @@ require([
 
   // ── AUTH ──────────────────────────────────────────────────────────────────
   esriConfig.portalUrl = ORG_URL;
+  esriConfig.request.trustedServers.push("services-ap1.arcgis.com");
   esriId.registerOAuthInfos([new OAuthInfo({
     appId: CLIENT_ID,
     portalUrl: ORG_URL,
     popup: false
   })]);
-  esriConfig.request.trustedServers.push("services-ap1.arcgis.com");
 
   // ── STATE ─────────────────────────────────────────────────────────────────
-  let selected     = [];   // [{objectId, square_id, globalId}]
+  let selected      = [];
   let diaryGlobalId = null;
   let diaryObjectId = null;
-  let highlight    = null;
-  let layerView    = null;
+  let highlight     = null;
+  let layerView     = null;
+  let gridLayer, tpLayer, diaryLayer, map, view;
 
-  // ── LAYERS ────────────────────────────────────────────────────────────────
-  const gridLayer = new FeatureLayer({
-    url: GRID_URL,
-    outFields: ["OBJECTID", "GlobalID", "square_id", "status", "test_pit_globalid"],
-    title: "Grid Squares"
-  });
-
-  const tpLayer = new FeatureLayer({
-    url: TP_URL,
-    outFields: ["OBJECTID", "GlobalID"],
-    title: "Test Pits",
-    visible: true,
-    opacity: 0.5
-  });
-
-  const diaryLayer = new FeatureLayer({
-    url: DIARY_URL,
-    outFields: ["OBJECTID", "GlobalID", "linked_test_pit_forms"],
-    visible: false
-  });
-
-  // ── MAP ───────────────────────────────────────────────────────────────────
-  const map  = new Map({ basemap: "gray-vector", layers: [gridLayer, tpLayer] });
-  const view = new MapView({ container: "viewDiv", map, zoom: 19 });
-
-  // Zoom to grid extent on load
-  gridLayer.when(() => {
-    gridLayer.queryExtent().then(r => {
-      if (r.extent) view.goTo(r.extent.expand(1.1));
+  // ── INIT — auth first, then build map ─────────────────────────────────────
+  esriId.checkSignInStatus(ORG_URL + "/sharing")
+    .catch(() => esriId.getCredential(ORG_URL + "/sharing"))
+    .then(startApp)
+    .catch(err => {
+      document.getElementById("diary-status").textContent = "Login failed: " + err.message;
+      document.getElementById("diary-status").className = "error";
     });
-  });
+
+  function startApp() {
+    // Layers created AFTER auth so token is available
+    gridLayer = new FeatureLayer({
+      url: GRID_URL,
+      outFields: ["OBJECTID", "GlobalID", "square_id", "status", "test_pit_globalid"],
+      title: "Grid Squares"
+    });
+    tpLayer = new FeatureLayer({
+      url: TP_URL,
+      outFields: ["OBJECTID", "GlobalID"],
+      title: "Test Pits",
+      opacity: 0.5
+    });
+    diaryLayer = new FeatureLayer({
+      url: DIARY_URL,
+      outFields: ["OBJECTID", "GlobalID", "linked_test_pit_forms"],
+      visible: false
+    });
+
+    map  = new Map({ basemap: "gray-vector", layers: [gridLayer, tpLayer, diaryLayer] });
+    view = new MapView({ container: "viewDiv", map, zoom: 19 });
+
+    gridLayer.when(() => {
+      gridLayer.queryExtent().then(r => {
+        if (r.extent) view.goTo(r.extent.expand(1.1));
+      });
+    });
+
+    view.whenLayerView(gridLayer).then(lv => {
+      layerView = lv;
+      view.on("click", async evt => {
+        const hit = await view.hitTest(evt, { include: [gridLayer] });
+        if (!hit.results.length) return;
+        const g   = hit.results[0].graphic;
+        const oid = g.attributes.OBJECTID;
+        const idx = selected.findIndex(f => f.objectId === oid);
+        if (idx > -1) { selected.splice(idx, 1); }
+        else { selected.push({ objectId: oid, square_id: g.attributes.square_id, globalId: g.attributes.GlobalID }); }
+        updateHighlight();
+        renderPanel();
+      });
+    });
+
+    checkDiary();
+  }
 
   // ── DIARY AUTO-DETECT ────────────────────────────────────────────────────
   function todayRange() {
@@ -253,31 +277,6 @@ require([
       el.className = "error";
     }
   }
-
-  // ── CLICK SELECTION ───────────────────────────────────────────────────────
-  view.whenLayerView(gridLayer).then(lv => {
-    layerView = lv;
-    view.on("click", async evt => {
-      const hit = await view.hitTest(evt, { include: [gridLayer] });
-      if (!hit.results.length) return;
-
-      const g   = hit.results[0].graphic;
-      const oid = g.attributes.OBJECTID;
-      const idx = selected.findIndex(f => f.objectId === oid);
-
-      if (idx > -1) {
-        selected.splice(idx, 1);
-      } else {
-        selected.push({
-          objectId: oid,
-          square_id: g.attributes.square_id,
-          globalId:  g.attributes.GlobalID
-        });
-      }
-      updateHighlight();
-      renderPanel();
-    });
-  });
 
   function updateHighlight() {
     if (highlight) { highlight.remove(); highlight = null; }
@@ -400,11 +399,6 @@ require([
     el.textContent = text;
     el.className = cls;
   }
-
-  // ── INIT ──────────────────────────────────────────────────────────────────
-  esriId.checkSignInStatus(ORG_URL + "/sharing")
-    .then(checkDiary)
-    .catch(() => esriId.getCredential(ORG_URL + "/sharing").then(checkDiary));
 
 });
 </script>

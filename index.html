@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <title>LangLang — Trench Selection</title>
+
+  <link rel="stylesheet" href="https://js.arcgis.com/4.29/esri/themes/dark/main.css">
+  <script src="https://js.arcgis.com/4.29/"></script>
+
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Avenir Next', Helvetica, Arial, sans-serif;
+      background: #1a1a2e;
+      color: #eee;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── HEADER ── */
+    #header {
+      background: #16213e;
+      padding: 10px 16px;
+      border-bottom: 2px solid #0f3460;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-shrink: 0;
+    }
+    #header h1 { font-size: 1rem; font-weight: 700; color: #e2a94b; letter-spacing: 0.5px; }
+    #diary-status { font-size: 0.8rem; color: #888; }
+    #diary-status.found { color: #4caf50; }
+    #diary-status.error { color: #e94560; }
+
+    /* ── BODY ── */
+    #main { display: flex; flex: 1; overflow: hidden; }
+
+    #viewDiv { flex: 1; }
+
+    /* ── SIDE PANEL ── */
+    #panel {
+      width: 280px;
+      background: #16213e;
+      border-left: 2px solid #0f3460;
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+    }
+
+    #panel-header {
+      padding: 10px 14px;
+      background: #0f3460;
+      font-size: 0.85rem;
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+
+    #instruction {
+      padding: 8px 14px;
+      font-size: 0.75rem;
+      color: #777;
+      border-bottom: 1px solid #0f3460;
+      flex-shrink: 0;
+    }
+
+    #selection-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 6px 8px;
+    }
+
+    .chip {
+      background: #0f3460;
+      border-radius: 4px;
+      padding: 5px 8px;
+      margin: 3px 0;
+      font-size: 0.78rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .chip button {
+      background: none; border: none;
+      color: #e94560; cursor: pointer;
+      font-size: 1.1rem; line-height: 1; padding: 0 2px;
+    }
+
+    #panel-footer {
+      padding: 10px 12px;
+      border-top: 2px solid #0f3460;
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+      flex-shrink: 0;
+    }
+
+    .btn {
+      padding: 9px 14px;
+      border: none; border-radius: 6px;
+      cursor: pointer; font-size: 0.85rem; font-weight: 600;
+      transition: opacity 0.15s;
+      width: 100%;
+    }
+    .btn:disabled { opacity: 0.35; cursor: not-allowed; }
+    .btn-danger    { background: #e94560; color: #fff; }
+    .btn-secondary { background: #0f3460; color: #ccc; }
+    .btn-success   { background: #4caf50; color: #fff; }
+
+    #confirm-section { display: none; flex-direction: column; gap: 7px; }
+
+    #status-msg {
+      font-size: 0.75rem; color: #888;
+      text-align: center; min-height: 18px;
+      line-height: 1.4;
+    }
+    #status-msg.success { color: #4caf50; }
+    #status-msg.error   { color: #e94560; }
+  </style>
+</head>
+<body>
+
+<div id="header">
+  <h1>LangLang Trench Selection</h1>
+  <div id="diary-status">Checking today's diary…</div>
+</div>
+
+<div id="main">
+  <div id="viewDiv"></div>
+
+  <div id="panel">
+    <div id="panel-header">Selected: <span id="count">0</span> square(s)</div>
+    <div id="instruction">Tap grid squares on the map to select / deselect</div>
+    <div id="selection-list"></div>
+    <div id="panel-footer">
+      <button class="btn btn-secondary" onclick="clearSelection()">Clear Selection</button>
+      <button class="btn btn-danger" id="open-btn" disabled onclick="openSurvey123()">
+        Open TestPit Form
+      </button>
+      <div id="confirm-section">
+        <button class="btn btn-success" id="confirm-btn" onclick="confirmSubmitted()">
+          OK: Confirm Submitted
+        </button>
+      </div>
+      <div id="status-msg"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+require([
+  "esri/config",
+  "esri/identity/OAuthInfo",
+  "esri/identity/IdentityManager",
+  "esri/Map",
+  "esri/views/MapView",
+  "esri/layers/FeatureLayer"
+], function(
+  esriConfig, OAuthInfo, esriId,
+  Map, MapView, FeatureLayer
+) {
+
+  // ── CONFIG ────────────────────────────────────────────────────────────────
+  const CLIENT_ID      = "TY5LdkK1k4TywedD";
+  const ORG_URL        = "https://urbancolours.maps.arcgis.com";
+  const SERVICE_URL    = "https://services-ap1.arcgis.com/IgsWg2ar08bbG8Nj/arcgis/rest/services/LangLang_SalvageProgram_DigitalSurvey/FeatureServer";
+  const SURVEY_ITEM_ID = "4ddce64cfc9f4de18f43c5ec1c2a0c52";
+
+  const GRID_URL   = SERVICE_URL + "/0";  // GridSquares
+  const TP_URL     = SERVICE_URL + "/1";  // TestPit
+  const DIARY_URL  = SERVICE_URL + "/3";  // Diary
+
+  // ── AUTH ──────────────────────────────────────────────────────────────────
+  esriConfig.portalUrl = ORG_URL;
+  esriId.registerOAuthInfos([new OAuthInfo({
+    appId: CLIENT_ID,
+    portalUrl: ORG_URL,
+    popup: true
+  })]);
+
+  // ── STATE ─────────────────────────────────────────────────────────────────
+  let selected     = [];   // [{objectId, square_id, globalId}]
+  let diaryGlobalId = null;
+  let diaryObjectId = null;
+  let highlight    = null;
+  let layerView    = null;
+
+  // ── LAYERS ────────────────────────────────────────────────────────────────
+  const gridLayer = new FeatureLayer({
+    url: GRID_URL,
+    outFields: ["OBJECTID", "GlobalID", "square_id", "status", "test_pit_globalid"],
+    title: "Grid Squares"
+  });
+
+  const tpLayer = new FeatureLayer({
+    url: TP_URL,
+    outFields: ["OBJECTID", "GlobalID"],
+    title: "Test Pits",
+    visible: true,
+    opacity: 0.5
+  });
+
+  const diaryLayer = new FeatureLayer({
+    url: DIARY_URL,
+    outFields: ["OBJECTID", "GlobalID", "linked_test_pit_forms"],
+    visible: false
+  });
+
+  // ── MAP ───────────────────────────────────────────────────────────────────
+  const map  = new Map({ basemap: "satellite", layers: [gridLayer, tpLayer] });
+  const view = new MapView({ container: "viewDiv", map, zoom: 19 });
+
+  // Zoom to grid extent on load
+  gridLayer.when(() => {
+    gridLayer.queryExtent().then(r => {
+      if (r.extent) view.goTo(r.extent.expand(1.1));
+    });
+  });
+
+  // ── DIARY AUTO-DETECT ────────────────────────────────────────────────────
+  function todayRange() {
+    const s = new Date(); s.setHours(0,0,0,0);
+    return { start: s.getTime(), end: s.getTime() + 86400000 };
+  }
+
+  async function checkDiary() {
+    const el = document.getElementById("diary-status");
+    try {
+      const { start, end } = todayRange();
+      const res = await diaryLayer.queryFeatures({
+        where: `CreationDate >= ${start} AND CreationDate < ${end}`,
+        outFields: ["OBJECTID", "GlobalID", "linked_test_pit_forms"],
+        returnGeometry: false
+      });
+      if (!res.features.length) {
+        el.textContent = "WARNING: No diary found for today — create today's diary first";
+        el.className = "error";
+      } else {
+        const f       = res.features[0];
+        diaryGlobalId = f.attributes.GlobalID;
+        diaryObjectId = f.attributes.OBJECTID;
+        el.textContent = "OK: Today's diary found — select squares below";
+        el.className = "found";
+      }
+    } catch(e) {
+      el.textContent = "Error checking diary: " + e.message;
+      el.className = "error";
+    }
+  }
+
+  // ── CLICK SELECTION ───────────────────────────────────────────────────────
+  view.whenLayerView(gridLayer).then(lv => {
+    layerView = lv;
+    view.on("click", async evt => {
+      const hit = await view.hitTest(evt, { include: [gridLayer] });
+      if (!hit.results.length) return;
+
+      const g   = hit.results[0].graphic;
+      const oid = g.attributes.OBJECTID;
+      const idx = selected.findIndex(f => f.objectId === oid);
+
+      if (idx > -1) {
+        selected.splice(idx, 1);
+      } else {
+        selected.push({
+          objectId: oid,
+          square_id: g.attributes.square_id,
+          globalId:  g.attributes.GlobalID
+        });
+      }
+      updateHighlight();
+      renderPanel();
+    });
+  });
+
+  function updateHighlight() {
+    if (highlight) { highlight.remove(); highlight = null; }
+    if (layerView && selected.length)
+      highlight = layerView.highlight(selected.map(f => f.objectId));
+  }
+
+  // ── PANEL ─────────────────────────────────────────────────────────────────
+  function renderPanel() {
+    document.getElementById("count").textContent = selected.length;
+    document.getElementById("selection-list").innerHTML = selected.map(f => `
+      <div class="chip">
+        <span>${f.square_id || "(no ID)"}</span>
+        <button onclick="removeSquare(${f.objectId})" title="Remove">×</button>
+      </div>`).join("");
+    document.getElementById("open-btn").disabled = !(selected.length > 0 && diaryGlobalId);
+  }
+
+  window.removeSquare = oid => {
+    selected = selected.filter(f => f.objectId !== oid);
+    updateHighlight(); renderPanel();
+  };
+
+  window.clearSelection = () => {
+    selected = [];
+    updateHighlight(); renderPanel();
+    document.getElementById("confirm-section").style.display = "none";
+    setMsg("", "");
+  };
+
+  // ── OPEN SURVEY123 ────────────────────────────────────────────────────────
+  window.openSurvey123 = () => {
+    const gridIds = selected.map(f => f.square_id).join(",");
+    const count   = selected.length;
+
+    const qs = new URLSearchParams({
+      "field:grid_ids":             gridIds,
+      "field:total_squares_initial": String(count)
+    }).toString();
+
+    // Mobile deep-link (Survey123 field app); falls back to web if app not installed
+    window.open(`arcgis-survey123://?itemID=${SURVEY_ITEM_ID}&${qs}`, "_self");
+
+    setTimeout(() => {
+      document.getElementById("confirm-section").style.display = "flex";
+      setMsg("Submit the form in Survey123, then return here and tap Confirm.", "");
+    }, 1500);
+  };
+
+  // ── CONFIRM & WRITE-BACK ──────────────────────────────────────────────────
+  window.confirmSubmitted = async () => {
+    const btn = document.getElementById("confirm-btn");
+    btn.disabled = true;
+    setMsg("Finding new TestPit record…", "");
+
+    try {
+      // 1 — Find most-recent TestPit created today
+      const { start } = todayRange();
+      const tpRes = await tpLayer.queryFeatures({
+        where: `CreationDate >= ${start}`,
+        outFields: ["OBJECTID", "GlobalID"],
+        orderByFields: ["CreationDate DESC"],
+        num: 1,
+        returnGeometry: false
+      });
+      if (!tpRes.features.length)
+        throw new Error("No TestPit found submitted today. Did the submission go through?");
+
+      const tpGid = tpRes.features[0].attributes.GlobalID;
+      setMsg(`Found TestPit — updating ${selected.length} square(s)…`, "");
+
+      // 2 — Update each selected GridSquare
+      const gridEdits = selected.map(f => ({
+        attributes: {
+          OBJECTID:          f.objectId,
+          test_pit_globalid: tpGid,
+          status:            "in_progress"
+        }
+      }));
+      const gridResult = await gridLayer.applyEdits({ updateFeatures: gridEdits });
+      const failed = gridResult.updateFeatureResults.filter(r => r.error).length;
+
+      // 3 — Append TestPit GlobalID to Diary.linked_test_pit_forms
+      const diaryRes = await diaryLayer.queryFeatures({
+        objectIds: [diaryObjectId],
+        outFields: ["linked_test_pit_forms"],
+        returnGeometry: false
+      });
+      const existing = diaryRes.features[0].attributes.linked_test_pit_forms || "";
+      const updated  = existing ? existing + "," + tpGid : tpGid;
+
+      await diaryLayer.applyEdits({
+        updateFeatures: [{
+          attributes: {
+            OBJECTID:              diaryObjectId,
+            linked_test_pit_forms: updated
+          }
+        }]
+      });
+
+      if (failed > 0) {
+        setMsg(`Done with warnings: ${failed} square(s) failed to update.`, "error");
+        btn.disabled = false;
+      } else {
+        setMsg(`OK: ${selected.length} square(s) linked to TestPit. Diary updated.`, "success");
+        document.getElementById("confirm-section").style.display = "none";
+        gridLayer.refresh();
+        clearSelection();
+      }
+
+    } catch(e) {
+      setMsg("Error: " + e.message, "error");
+      btn.disabled = false;
+    }
+  };
+
+  // ── HELPERS ───────────────────────────────────────────────────────────────
+  function setMsg(text, cls) {
+    const el = document.getElementById("status-msg");
+    el.textContent = text;
+    el.className = cls;
+  }
+
+  // ── INIT ──────────────────────────────────────────────────────────────────
+  esriId.checkSignInStatus(ORG_URL + "/sharing")
+    .then(checkDiary)
+    .catch(() => esriId.getCredential(ORG_URL + "/sharing").then(checkDiary));
+
+});
+</script>
+</body>
+</html>

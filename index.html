@@ -178,8 +178,9 @@ require([
   esriId.registerOAuthInfos([new OAuthInfo({
     appId: CLIENT_ID,
     portalUrl: ORG_URL,
-    popup: true
+    popup: false
   })]);
+  esriConfig.request.trustedServers.push("services-ap1.arcgis.com");
 
   // ── STATE ─────────────────────────────────────────────────────────────────
   let selected     = [];   // [{objectId, square_id, globalId}]
